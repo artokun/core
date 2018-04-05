@@ -2,11 +2,11 @@ class NanoPoolMiner extends BasePoolMiner {
     /**
      * @param {BaseChain} blockchain
      * @param {Time} time
-     * @param {Address} address
+     * @param {Wallet} wallet
      * @param {number} deviceId
      */
-    constructor(blockchain, time, address, deviceId) {
-        super(blockchain, null, null, time, address, deviceId);
+    constructor(blockchain, time, wallet, deviceId) {
+        super(blockchain, null, null, time, wallet, deviceId);
 
         this.on('share', (block) => this._onBlockMined(block));
     }
@@ -105,7 +105,7 @@ class NanoPoolMiner extends BasePoolMiner {
         this._send({
             message: 'register',
             mode: 'nano',
-            address: this._ourAddress.toUserFriendlyAddress(),
+            address: this._ourWallet.address.toUserFriendlyAddress(),
             deviceId: this._deviceId
         });
     }

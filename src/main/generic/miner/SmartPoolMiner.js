@@ -4,12 +4,12 @@ class SmartPoolMiner extends BasePoolMiner {
      * @param {Accounts} accounts
      * @param {Mempool} mempool
      * @param {Time} time
-     * @param {Address} address
+     * @param {Wallet} wallet
      * @param {number} deviceId
      * @param {Uint8Array} [extraData=new Uint8Array(0)]
      */
-    constructor(blockchain, accounts, mempool, time, address, deviceId, extraData = new Uint8Array(0)) {
-        super(blockchain, accounts, mempool, time, address, deviceId, extraData);
+    constructor(blockchain, accounts, mempool, time, wallet, deviceId, extraData = new Uint8Array(0)) {
+        super(blockchain, accounts, mempool, time, wallet, deviceId, extraData);
 
         this.on('share', (block) => this._onBlockMined(block));
     }
@@ -31,7 +31,7 @@ class SmartPoolMiner extends BasePoolMiner {
         this._send({
             message: 'register',
             mode: 'smart',
-            address: this._ourAddress.toUserFriendlyAddress(),
+            address: this._ourWallet.address.toUserFriendlyAddress(),
             deviceId: this._deviceId
         });
     }

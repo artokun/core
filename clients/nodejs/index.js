@@ -172,11 +172,11 @@ const $ = {};
         const deviceId = Nimiq.BasePoolMiner.generateDeviceId(networkConfig);
         switch (config.poolMining.mode) {
             case 'nano':
-                $.miner = new Nimiq.NanoPoolMiner($.blockchain, $.network.time, $.wallet.address, deviceId);
+                $.miner = new Nimiq.NanoPoolMiner($.blockchain, $.network.time, $.wallet, deviceId);
                 break;
             case 'smart':
             default:
-                $.miner = new Nimiq.SmartPoolMiner($.blockchain, $.accounts, $.mempool, $.network.time, $.wallet.address, deviceId, extraData);
+                $.miner = new Nimiq.SmartPoolMiner($.blockchain, $.accounts, $.mempool, $.network.time, $.wallet, deviceId, extraData);
                 break;
         }
         $.consensus.on('established', () => {
