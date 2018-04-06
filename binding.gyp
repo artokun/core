@@ -68,11 +68,11 @@
             ],
             "cflags_c": [
                 "-std=c99",
-                "-mtune=armhf"
+                "-mtune=cortex-a15.cortex-a7"
             ],
             "xcode_settings": {
                 "OTHER_CFLAGS": [
-                    "-mtune=armhf"
+                    "-mtune=cortex-a15.cortex-a7"
                 ]
             }
         }
