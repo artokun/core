@@ -68,11 +68,11 @@
             ],
             "cflags_c": [
                 "-std=c99",
-                "-mtune=generic"
+                "-mtune=armhf"
             ],
             "xcode_settings": {
                 "OTHER_CFLAGS": [
-                    "-mtune=generic"
+                    "-mtune=armhf"
                 ]
             }
         }
