@@ -54,7 +54,7 @@ class PeerChannel extends Observable {
 
         try {
             await this.fire(PeerChannel.Event[msg.type], msg, this);
-            this.fire('message-log', msg, this, Date.now() - start);
+            this.fire('message-log', msg, this, Date.now() - start, rawMsg.byteLength);
         } catch (e) {
             Log.w(PeerChannel, `Error while processing '${PeerChannel.Event[msg.type]}' message from ${this.peerAddress || this.netAddress}: ${e}`);
         }
@@ -226,10 +226,11 @@ class PeerChannel extends Observable {
     /**
      * @param {number} protocolMask
      * @param {number} serviceMask
+     * @param {number} maxResults
      * @return {boolean}
      */
-    getAddr(protocolMask, serviceMask) {
-        return this._send(new GetAddrMessage(protocolMask, serviceMask));
+    getAddr(protocolMask, serviceMask, maxResults) {
+        return this._send(new GetAddrMessage(protocolMask, serviceMask, maxResults));
     }
 
     /**

@@ -720,6 +720,11 @@ class FullChain extends BaseChain {
     accountsHash() {
         return this._accounts.hash();
     }
+
+    /** @type {PrioritySynchronizer} */
+    get queue() {
+        return this._synchronizer;
+    }
 }
 
 FullChain.ERR_ORPHAN = -2;

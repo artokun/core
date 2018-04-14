@@ -38,6 +38,19 @@ class Nimiq {
      * @returns {Promise} Promise that resolves once the library was loaded.
      */
     static load(path) {
+        return Nimiq._load(path, 'web');
+    }
+
+    /**
+     * Load the reduced offline version of the Nimiq library.
+     * @param {?string} [path] Path that contains the required files to load the library.
+     * @returns {Promise} Promise that resolves once the library was loaded.
+     */
+    static loadOffline(path) {
+        return Nimiq._load(path, 'web-offline');
+    }
+
+    static _load(path, script) {
         if (!Nimiq._hasNativePromise()) return Nimiq._unsupportedPromise();
         if (Nimiq._loaded) return Promise.resolve();
         Nimiq._loadPromise = Nimiq._loadPromise ||
@@ -48,10 +61,10 @@ class Nimiq {
                         error(Nimiq.ERR_UNSUPPORTED);
                         return;
                     } else if (!Nimiq._hasAsyncAwaitSupport()) {
-                        Nimiq.script = 'web-babel.js';
+                        Nimiq._script = `${script}-babel.js`;
                         console.warn('Client lacks native support for async');
                     } else {
-                        Nimiq._script = 'web.js';
+                        Nimiq._script = `${script}.js`;
                     }
                 }
 
@@ -74,7 +87,7 @@ class Nimiq {
                         resolve();
                     }
                 };
-                Nimiq._loadScript(Nimiq._fullScript, Nimiq._onload);
+                Nimiq._loadScript(Nimiq._fullScript);
             }).then(() => new Promise((resolve, reject) =>
                 Nimiq.WasmHelper.doImportBrowser()
                     .then(resolve)
@@ -83,8 +96,7 @@ class Nimiq {
         return Nimiq._loadPromise;
     }
 
-    static _loadScript(url, resolve) {
-        // Adding the script tag to the head as suggested before
+    static _loadScript(url) {
         const head = document.getElementsByTagName('head')[0];
         const script = document.createElement('script');
         script.type = 'text/javascript';

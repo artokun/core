@@ -43,7 +43,7 @@ class NanoConsensus extends BaseConsensus {
         const agent = super._onPeerJoined(peer);
 
         // Forward sync events.
-        this.bubble(agent, 'sync-chain-proof', 'verify-chain-proof');
+        this.bubble(agent, 'sync-chain-proof', 'verify-chain-proof', 'transaction-relayed');
 
         return agent;
     }
@@ -92,11 +92,14 @@ class NanoConsensus extends BaseConsensus {
      */
     async getAccounts(addresses, blockHash) {
         blockHash = blockHash ? blockHash : this._blockchain.headHash;
-        const agents = this._agents.values().filter(agent =>
-            agent.synced
-            && agent.knowsBlock(blockHash)
-            && !Services.isNanoNode(agent.peer.peerAddress.services)
-        );
+        const agents = [];
+        for (const agent of this._agents.valueIterator()) {
+            if (agent.synced
+                && agent.knowsBlock(blockHash)
+                && !Services.isNanoNode(agent.peer.peerAddress.services)) {
+                agents.push(agent);
+            }
+        }
 
         for (const /** @type {NanoConsensusAgent} */ agent of agents) {
             try {

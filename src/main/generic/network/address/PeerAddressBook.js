@@ -20,6 +20,18 @@ class PeerAddressBook extends Observable {
         this._store = new HashSet();
 
         /**
+         * @type {HashSet}
+         * @private
+         */
+        this._wsStates = new HashSet();
+
+        /**
+         * @type {HashSet}
+         * @private
+         */
+        this._rtcStates = new HashSet();
+
+        /**
          * Map from peerIds to RTC peerAddresses.
          * @type {HashMap.<PeerId,PeerAddressState>}
          * @private
@@ -40,10 +52,24 @@ class PeerAddressBook extends Observable {
     }
 
     /**
-     * @returns {Array.<PeerAddressState>}
+     * @returns {Iterator.<PeerAddressState>}
      */
-    values() {
-        return this._store.values();
+    iterator() {
+        return this._store.valueIterator();
+    }
+
+    /**
+     * @returns {Iterator.<PeerAddressState>}
+     */
+    wsIterator() {
+        return this._wsStates.valueIterator();
+    }
+
+    /**
+     * @returns {Iterator.<PeerAddressState>}
+     */
+    rtcIterator() {
+        return this._rtcStates.valueIterator();
     }
 
     /**
@@ -105,19 +131,37 @@ class PeerAddressBook extends Observable {
      * @param {number} maxAddresses
      * @returns {Array.<PeerAddress>}
      */
-    query(protocolMask, serviceMask, maxAddresses = 1000) {
-        const addressStates = this._store.values();
-        const numAddresses = addressStates.length;
+    query(protocolMask, serviceMask, maxAddresses = NetworkAgent.MAX_ADDR_PER_MESSAGE) {
+        let store;
+        switch (protocolMask) {
+            case Protocol.WS:
+                store = this._wsStates;
+                break;
+            case Protocol.RTC:
+                store = this._rtcStates;
+                break;
+            default:
+                store = this._store;
+        }
 
-        // Pick a random start index.
-        const index = Math.floor(Math.random() * numAddresses);
+        const numAddresses = store.length;
+
+        // Pick a random start index if we have a lot of addresses.
+        let startIndex = 0, endIndex = numAddresses;
+        if (numAddresses > maxAddresses) {
+            startIndex = Math.floor(Math.random() * numAddresses);
+            endIndex = (startIndex + maxAddresses) % numAddresses;
+        }
+        const overflow = startIndex > endIndex;
 
         // XXX inefficient linear scan
-        const now = Date.now();
         const addresses = [];
-        for (let i = 0; i < numAddresses; i++) {
-            const idx = (index + i) % numAddresses;
-            const peerAddressState = addressStates[idx];
+        let index = -1;
+        for (const peerAddressState of store.valueIterator()) {
+            index++;
+            if (!overflow && index < startIndex) continue;
+            if (!overflow && index >= endIndex) break;
+            if (overflow && (index >= endIndex && index < startIndex)) continue;
 
             // Never return banned or failed addresses.
             if (peerAddressState.state === PeerAddressState.BANNED
@@ -141,12 +185,18 @@ class PeerAddressBook extends Observable {
                 continue;
             }
 
+            // XXX Why is this here?
             // Update timestamp for connected peers.
-            if (peerAddressState.state === PeerAddressState.ESTABLISHED) {
-                // Also update timestamp for RTC connections
-                if (peerAddressState.signalRouter.bestRoute) {
-                    peerAddressState.signalRouter.bestRoute.timestamp = now;
-                }
+            // if (peerAddressState.state === PeerAddressState.ESTABLISHED) {
+            //     // Also update timestamp for RTC connections
+            //     if (peerAddressState.signalRouter.bestRoute) {
+            //         peerAddressState.signalRouter.bestRoute.timestamp = now;
+            //     }
+            // }
+
+            // Exclude RTC addresses that are already at MAX_DISTANCE.
+            if (address.protocol === Protocol.RTC && address.distance >= PeerAddressBook.MAX_DISTANCE) {
+                continue;
             }
 
             // Never return addresses that are too old.
@@ -156,11 +206,6 @@ class PeerAddressBook extends Observable {
 
             // Return this address.
             addresses.push(address);
-
-            // Stop if we have collected maxAddresses.
-            if (addresses.length >= maxAddresses) {
-                break;
-            }
         }
         return addresses;
     }
@@ -193,11 +238,6 @@ class PeerAddressBook extends Observable {
      * @private
      */
     _add(channel, peerAddress) {
-        // Max book size reached
-        if (this._store.length >= PeerAddressBook.MAX_SIZE) {
-            return false;
-        }
-
         // Ignore our own address.
         if (this._networkConfig.peerAddress.equals(peerAddress)) {
             return false;
@@ -206,13 +246,13 @@ class PeerAddressBook extends Observable {
         // Ignore address if it is too old.
         // Special case: allow seed addresses (timestamp == 0) via null channel.
         if (channel && peerAddress.exceedsAge()) {
-            Log.d(PeerAddressBook, `Ignoring address ${peerAddress} - too old (${new Date(peerAddress.timestamp)})`);
+            Log.v(PeerAddressBook, () => `Ignoring address ${peerAddress} - too old (${new Date(peerAddress.timestamp)})`);
             return false;
         }
 
         // Ignore address if its timestamp is too far in the future.
         if (peerAddress.timestamp > Date.now() + PeerAddressBook.MAX_TIMESTAMP_DRIFT) {
-            Log.d(PeerAddressBook, `Ignoring addresses ${peerAddress} - timestamp in the future`);
+            Log.v(PeerAddressBook, () => `Ignoring addresses ${peerAddress} - timestamp in the future`);
             return false;
         }
 
@@ -222,7 +262,7 @@ class PeerAddressBook extends Observable {
 
             // Ignore address if it exceeds max distance.
             if (peerAddress.distance > PeerAddressBook.MAX_DISTANCE) {
-                Log.d(PeerAddressBook, `Ignoring address ${peerAddress} - max distance exceeded`);
+                Log.v(PeerAddressBook, () => `Ignoring address ${peerAddress} - max distance exceeded`);
                 // Drop any route to this peer over the current channel. This may prevent loops.
                 const peerAddressState = this._get(peerAddress);
                 if (peerAddressState) {
@@ -240,6 +280,7 @@ class PeerAddressBook extends Observable {
         let knownAddress = null;
         let changed = false;
         if (peerAddressState) {
+            // Update address.
             knownAddress = peerAddressState.peerAddress;
 
             // Ignore address if it is banned.
@@ -257,22 +298,38 @@ class PeerAddressBook extends Observable {
                 peerAddress.netAddress = knownAddress.netAddress;
             }
         } else {
+            // New address, check max book size.
+            if (this._store.length >= PeerAddressBook.MAX_SIZE) {
+                return false;
+            }
+            // Check max size per protocol.
+            switch (peerAddress.protocol) {
+                case Protocol.WS:
+                    if (this._wsStates.length >= PeerAddressBook.MAX_SIZE_WS) {
+                        return false;
+                    }
+                    break;
+                case Protocol.RTC:
+                    if (this._rtcStates.length >= PeerAddressBook.MAX_SIZE_RTC) {
+                        return false;
+                    }
+                    break;
+                default:
+                // Dumb addresses are only part of global limit.
+            }
+
             // If we know the IP address of the sender, check that we don't exceed the maximum number of addresses per IP.
             if (netAddress) {
                 const states = this._statesByNetAddress.get(netAddress);
                 if (states && states.size >= PeerAddressBook.MAX_SIZE_PER_IP) {
-                    Log.d(PeerAddressBook, `Ignoring address ${peerAddress} - max count per IP ${netAddress} reached`);
+                    Log.v(PeerAddressBook, () => `Ignoring address ${peerAddress} - max count per IP ${netAddress} reached`);
                     return false;
                 }
             }
 
             // Add new peerAddressState.
             peerAddressState = new PeerAddressState(peerAddress);
-            this._store.add(peerAddressState);
-            if (peerAddress.peerId) {
-                // Index by peerId.
-                this._stateByPeerId.put(peerAddress.peerId, peerAddressState);
-            }
+            this._addToStore(peerAddressState);
             changed = true;
         }
 
@@ -288,18 +345,55 @@ class PeerAddressBook extends Observable {
         }
 
         // Track which IP address send us this address.
-        if (netAddress) {
-            peerAddressState.addedBy.add(channel.netAddress);
+        this._trackByNetAddress(peerAddressState, netAddress);
 
-            let states = this._statesByNetAddress.get(channel.netAddress);
-            if (!states) {
-                states = new Set();
-                this._statesByNetAddress.put(channel.netAddress, states);
-            }
-            states.add(peerAddressState);
-        }
 
         return changed;
+    }
+
+    /**
+     * @param {PeerAddressState} peerAddressState
+     * @private
+     */
+    _addToStore(peerAddressState) {
+        this._store.add(peerAddressState);
+
+        // Index by peerId.
+        if (peerAddressState.peerAddress.peerId) {
+            this._stateByPeerId.put(peerAddressState.peerAddress.peerId, peerAddressState);
+        }
+
+        // Index by protocol.
+        switch (peerAddressState.peerAddress.protocol) {
+            case Protocol.WS:
+                this._wsStates.add(peerAddressState);
+                break;
+            case Protocol.RTC:
+                this._rtcStates.add(peerAddressState);
+                break;
+            default:
+                // Dumb addresses are ignored.
+        }
+    }
+
+    /**
+     * @param {PeerAddressState} peerAddressState
+     * @param {NetAddress} netAddress
+     * @private
+     */
+    _trackByNetAddress(peerAddressState, netAddress) {
+        if (!netAddress) {
+            return;
+        }
+
+        peerAddressState.addedBy.add(netAddress);
+
+        let states = this._statesByNetAddress.get(netAddress);
+        if (!states) {
+            states = new Set();
+            this._statesByNetAddress.put(netAddress, states);
+        }
+        states.add(peerAddressState);
     }
 
     /**
@@ -316,13 +410,12 @@ class PeerAddressBook extends Observable {
         
         if (!peerAddressState) {
             peerAddressState = new PeerAddressState(peerAddress);
-
-            this._store.add(peerAddressState);
+            this._addToStore(peerAddressState);
         }
 
-        if (peerAddress.peerId) {
-            this._stateByPeerId.put(peerAddress.peerId, peerAddressState);
-        }
+        // Get the (reliable) netAddress of the peer that sent us this address.
+        const netAddress = channel && channel.netAddress && channel.netAddress.reliable ? channel.netAddress : null;
+        this._trackByNetAddress(peerAddressState, netAddress);
 
         peerAddressState.state = PeerAddressState.ESTABLISHED;
         peerAddressState.lastConnected = Date.now();
@@ -370,7 +463,7 @@ class PeerAddressBook extends Observable {
             if (peerAddressState.failedAttempts >= peerAddressState.maxFailedAttempts) {
                 // Remove address only if we have tried the maximum number of backoffs.
                 if (peerAddressState.banBackoff >= PeerAddressBook.MAX_FAILED_BACKOFF) {
-                    this._remove(peerAddress);
+                    this._removeFromStore(peerAddress);
                 } else {
                     peerAddressState.bannedUntil = Date.now() + peerAddressState.banBackoff;
                     peerAddressState.banBackoff = Math.min(PeerAddressBook.MAX_FAILED_BACKOFF, peerAddressState.banBackoff * 2);
@@ -380,7 +473,7 @@ class PeerAddressBook extends Observable {
 
         // Immediately delete dumb addresses, since we cannot connect to those anyway.
         if (peerAddress.protocol === Protocol.DUMB) {
-            this._remove(peerAddress);
+            this._removeFromStore(peerAddress);
         }
     }
 
@@ -407,7 +500,7 @@ class PeerAddressBook extends Observable {
 
         peerAddressState.signalRouter.deleteBestRoute();
         if (!peerAddressState.signalRouter.hasRoute()) {
-            this._remove(peerAddressState.peerAddress);
+            this._removeFromStore(peerAddressState.peerAddress);
         }
     }
 
@@ -451,7 +544,7 @@ class PeerAddressBook extends Observable {
      * @returns {void}
      * @private
      */
-    _remove(peerAddress) {
+    _removeFromStore(peerAddress) {
         const peerAddressState = this._get(peerAddress);
         if (!peerAddressState) {
             return;
@@ -479,6 +572,18 @@ class PeerAddressBook extends Observable {
             }
         }
 
+        // Remove from protocol index.
+        switch (peerAddressState.peerAddress.protocol) {
+            case Protocol.WS:
+                this._wsStates.remove(peerAddressState);
+                break;
+            case Protocol.RTC:
+                this._rtcStates.remove(peerAddressState);
+                break;
+            default:
+                // Dumb addresses are ignored.
+        }
+
         // Don't delete bans.
         if (peerAddressState.state === PeerAddressState.BANNED) {
             return;
@@ -496,11 +601,11 @@ class PeerAddressBook extends Observable {
      */
     _removeBySignalChannel(channel) {
         // XXX inefficient linear scan
-        for (const peerAddressState of this._store.values()) {
+        for (const peerAddressState of this._store.valueIterator()) {
             if (peerAddressState.peerAddress.protocol === Protocol.RTC) {
                 peerAddressState.signalRouter.deleteRoute(channel);
                 if (!peerAddressState.signalRouter.hasRoute()) {
-                    this._remove(peerAddressState.peerAddress);
+                    this._removeFromStore(peerAddressState.peerAddress);
                 }
             }
         }
@@ -514,7 +619,7 @@ class PeerAddressBook extends Observable {
         const now = Date.now();
         const unbannedAddresses = [];
 
-        for (/** @type {PeerAddressState} */ const peerAddressState of this._store.values()) {
+        for (/** @type {PeerAddressState} */ const peerAddressState of this._store.valueIterator()) {
             const addr = peerAddressState.peerAddress;
 
             switch (peerAddressState.state) {
@@ -523,7 +628,7 @@ class PeerAddressBook extends Observable {
                 case PeerAddressState.FAILED:
                     // Delete all new peer addresses that are older than MAX_AGE.
                     if (addr.exceedsAge()) {
-                        this._remove(addr);
+                        this._removeFromStore(addr);
                         continue;
                     }
 
@@ -577,9 +682,19 @@ class PeerAddressBook extends Observable {
     get knownAddressesCount() {
         return this._store.length;
     }
+
+    /** @type {number} */
+    get knownWsAddressesCount() {
+        return this._wsStates.length;
+    }
+
+    /** @type {number} */
+    get knownRtcAddressesCount() {
+        return this._rtcStates.length;
+    }
 }
 PeerAddressBook.MAX_AGE_WEBSOCKET = 1000 * 60 * 30; // 30 minutes
-PeerAddressBook.MAX_AGE_WEBRTC = 1000 * 60 * 10; // 10 minutes
+PeerAddressBook.MAX_AGE_WEBRTC = 1000 * 60 * 15; // 10 minutes
 PeerAddressBook.MAX_AGE_DUMB = 1000 * 60; // 1 minute
 PeerAddressBook.MAX_DISTANCE = 4;
 PeerAddressBook.MAX_FAILED_ATTEMPTS_WS = 3;
@@ -589,6 +704,8 @@ PeerAddressBook.HOUSEKEEPING_INTERVAL = 1000 * 60; // 1 minute
 PeerAddressBook.DEFAULT_BAN_TIME = 1000 * 60 * 10; // 10 minutes
 PeerAddressBook.INITIAL_FAILED_BACKOFF = 1000 * 30; // 30 seconds
 PeerAddressBook.MAX_FAILED_BACKOFF = 1000 * 60 * 10; // 10 minutes
-PeerAddressBook.MAX_SIZE = PlatformUtils.isBrowser() ? 15000 : 100000;
+PeerAddressBook.MAX_SIZE_WS = PlatformUtils.isBrowser() ? 1000 : 10000;
+PeerAddressBook.MAX_SIZE_RTC = PlatformUtils.isBrowser() ? 1000 : 10000;
+PeerAddressBook.MAX_SIZE = PlatformUtils.isBrowser() ? 2500 : 20500; // Includes dumb peers
 PeerAddressBook.MAX_SIZE_PER_IP = 250;
 Class.register(PeerAddressBook);

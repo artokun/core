@@ -2,19 +2,19 @@
  * @template V
  * @implements {Iterable.<V>}
  */
-class LimitInclusionHashSet {
+class LimitHashSet {
     /**
      * @param {number} limit
      * @param {function(o: object): string} [fnHash]
      */
-    constructor(limit, fnHash = LimitInclusionHashSet._hash) {
+    constructor(limit, fnHash = LimitHashSet._hash) {
         if (limit <= 0) throw new Error('Invalid limit');
         /** @type {number} */
         this._limit = limit;
         /** @type {function(o: object): string} */
         this._fnHash = fnHash;
-        /** @type {UniqueLinkedList.<string>} */
-        this._list = new UniqueLinkedList(it => /** @type {string} */ it);
+        /** @type {UniqueLinkedList.<V>} */
+        this._list = new UniqueLinkedList(fnHash);
     }
 
     /**
@@ -27,14 +27,15 @@ class LimitInclusionHashSet {
         return o.hashCode ? o.hashCode() : o.toString();
     }
 
+
     /**
      * @param {V|*} value
      */
     add(value) {
-        if (this.length >= this._limit) {
+        this._list.push(value, true);
+        if (this._list.length > this._limit) {
             this._list.shift();
         }
-        this._list.push(this._fnHash(value));
     }
 
     /**
@@ -48,9 +49,17 @@ class LimitInclusionHashSet {
 
     /**
      * @param {V|*} value
+     * @returns {V|*}
+     */
+    get(value) {
+        return this._list.get(value);
+    }
+
+    /**
+     * @param {V|*} value
      */
     remove(value) {
-        this._list.remove(this._fnHash(value));
+        this._list.remove(value);
     }
 
     /**
@@ -62,6 +71,9 @@ class LimitInclusionHashSet {
         }
     }
 
+    /**
+     * @returns {void}
+     */
     clear() {
         this._list.clear();
     }
@@ -71,25 +83,25 @@ class LimitInclusionHashSet {
      * @returns {boolean}
      */
     contains(value) {
-        return this._list.contains(this._fnHash(value));
+        return this._list.contains(value);
     }
 
     /**
-     * @returns {Array.<string>}
+     * @returns {Array.<V|*>}
      */
     values() {
-        return Array.from(this._list);
+        return Array.from(this._list.iterator());
     }
 
     /**
-     * @returns {Iterator.<string>}
+     * @returns {Iterator.<V|*>}
      */
     valueIterator() {
         return this._list.iterator();
     }
 
     /**
-     * @returns {Iterator.<string>}
+     * @returns {Iterator.<V|*>}
      */
     [Symbol.iterator]() {
         return this.valueIterator();
@@ -108,24 +120,5 @@ class LimitInclusionHashSet {
     isEmpty() {
         return this._list.length === 0;
     }
-
-    /**
-     * @param {string} hash
-     * @protected
-     */
-    _addHashed(hash) {
-        this._list.push(hash);
-    }
-
-    /**
-     * @returns {LimitInclusionHashSet}
-     */
-    clone() {
-        const set = new LimitInclusionHashSet(this._limit, this._fnHash);
-        for (const hash of this) {
-            set._addHashed(hash);
-        }
-        return set;
-    }
 }
-Class.register(LimitInclusionHashSet);
+Class.register(LimitHashSet);

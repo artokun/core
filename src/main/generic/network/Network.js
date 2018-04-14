@@ -61,12 +61,10 @@ class Network extends Observable {
          */
         this._addresses = new PeerAddressBook(this._networkConfig);
 
-        // Relay new addresses to peers.
-        this._addresses.on('added', addresses => {
-            this._relayAddresses(addresses);
-            this._checkPeerCount();
+        this._addresses.on('added', () => {
+            setTimeout(this._checkPeerCount.bind(this), Network.CONNECT_THROTTLE);
         });
-       
+
         /**
          * Peer connections database & operator
          * @type {ConnectionPool}
@@ -143,9 +141,6 @@ class Network extends Observable {
         // Recalculate the network adjusted offset
         this._updateTimeOffset();
 
-        // Tell others about the address that we just connected to.
-        this._relayAddresses([peer.peerAddress]);
-
         this.fire('peer-joined', peer);
     }
 
@@ -184,32 +179,6 @@ class Network extends Observable {
         this._connections.allowInboundExchange = this._scorer.lowestConnectionScore !== null
             ? this._scorer.lowestConnectionScore < Network.SCORE_INBOUND_EXCHANGE
             : false;
-    }
-
-    /**
-     * @param {Array.<PeerAddress>} addresses
-     * @returns {void}
-     * @private
-     */
-    _relayAddresses(addresses) {
-        // Pick PEER_COUNT_RELAY random peers and relay addresses to them if:
-        // - number of addresses <= 10
-        // TODO more restrictions, see Bitcoin
-        if (addresses.length > 10) {
-            return;
-        }
-
-        // XXX We don't protect against picking the same peer more than once.
-        // The NetworkAgent will take care of not sending the addresses twice.
-        // In that case, the address will simply be relayed to less peers. Also,
-        // the peer that we pick might already know the address.
-        const peerConnections = this._connections.values();
-        for (let i = 0; i < Network.PEER_COUNT_RELAY; ++i) {
-            const peerConnection = ArrayUtils.randomElement(peerConnections);
-            if (peerConnection && peerConnection.state === PeerConnectionState.ESTABLISHED && peerConnection.networkAgent) {
-                peerConnection.networkAgent.relayAddresses(addresses);
-            }
-        }
     }
 
     /**
@@ -310,6 +279,43 @@ class Network extends Observable {
         this._connections.allowInboundExchange = this._scorer.lowestConnectionScore !== null
             ? this._scorer.lowestConnectionScore < Network.SCORE_INBOUND_EXCHANGE
             : false;
+
+
+        // Request fresh addresses.
+        this._refreshAddresses();
+    }
+
+    _refreshAddresses() {
+        if (this._scorer.connectionScores && this._scorer.connectionScores.length > 0) {
+            const cutoff = Math.min(this._connections.peerCountWs * 2, Network.ADDRESS_REQUEST_CUTOFF);
+            const length = Math.min(this._scorer.connectionScores.length, cutoff);
+            for (let i = 0; i < Math.min(Network.ADDRESS_REQUEST_PEERS, this._scorer.connectionScores.length); i++) {
+                const index = Math.floor(Math.random() * length);
+                const peerConnection = this._scorer.connectionScores[index];
+                Log.v(Network, () => `Requesting addresses from ${peerConnection.peerAddress} (score idx ${index})`);
+                peerConnection.networkAgent.requestAddresses();
+            }
+        } else {
+            const index = Math.floor(Math.random() * Math.min(this._connections.count, 10));
+
+            /** @type {PeerConnection} */
+            let peerConnection;
+            let i = 0;
+            for (const conn of this._connections.valueIterator()) {
+                if (conn.state === PeerConnectionState.ESTABLISHED) {
+                    peerConnection = conn;
+                }
+                if (i >= index && peerConnection) {
+                    break;
+                }
+                i++;
+            }
+
+            if (peerConnection) {
+                Log.v(Network, () => `Requesting addresses from ${peerConnection.peerAddress} (rand idx ${index})`);
+                peerConnection.networkAgent.requestAddresses();
+            }
+        }
     }
 
     /** @type {Time} */
@@ -416,11 +422,6 @@ Network.PEER_COUNT_RECYCLING_ACTIVE = PlatformUtils.isBrowser() ? 5 : 1000;
  * @type {number}
  * @constant
  */
-Network.PEER_COUNT_RELAY = 4;
-/**
- * @type {number}
- * @constant
- */
 Network.CONNECTING_COUNT_MAX = 2;
 /**
  * @type {number}
@@ -431,12 +432,12 @@ Network.SIGNAL_TTL_INITIAL = 3;
  * @type {number}
  * @constant
  */
-Network.CONNECT_BACKOFF_INITIAL = 1000; // 1 second
+Network.CONNECT_BACKOFF_INITIAL = 2000; // 2 seconds
 /**
  * @type {number}
  * @constant
  */
-Network.CONNECT_BACKOFF_MAX = 5 * 60 * 1000; // 5 minutes
+Network.CONNECT_BACKOFF_MAX = 10 * 60 * 1000; // 10 minutes
 /**
  * @type {number}
  * @constant
@@ -456,6 +457,9 @@ Network.SCORE_INBOUND_EXCHANGE = 0.5;
  * @type {number}
  * @constant
  */
-Network.CONNECT_THROTTLE = 300; // 300 ms
+Network.CONNECT_THROTTLE = 1000; // 1 second
+
+Network.ADDRESS_REQUEST_CUTOFF = 250;
+Network.ADDRESS_REQUEST_PEERS = 2;
 
 Class.register(Network);

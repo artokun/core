@@ -4,9 +4,10 @@ class PartialLightChain extends LightChain {
      * @param {Accounts} accounts
      * @param {Time} time
      * @param {ChainProof} proof
+     * @param {PrioritySynchronizer} commitSynchronizer
      * @returns {PartialLightChain}
      */
-    constructor(store, accounts, time, proof) {
+    constructor(store, accounts, time, proof, commitSynchronizer) {
         const tx = store.transaction(false);
         super(tx, accounts, time);
 
@@ -21,6 +22,8 @@ class PartialLightChain extends LightChain {
         this._accountsTx = null;
         /** @type {ChainData} */
         this._proofHead = null;
+        /** @type {PrioritySynchronizer} */
+        this._commitSynchronizer = commitSynchronizer;
     }
 
     /**
@@ -139,43 +142,36 @@ class PartialLightChain extends LightChain {
      * @protected
      */
     async _acceptProof(proof, suffix) {
-        // If the proof prefix head is not part of our current dense chain suffix, reset store and start over.
-        // TODO use a store transaction here?
-        const head = proof.prefix.head;
-        const headHash = head.hash();
-        const headData = await this._store.getChainData(headHash);
-        if (!headData || headData.totalDifficulty <= 0) {
-            // Delete our current chain.
-            await this._store.truncate();
+        // Delete our current chain.
+        await this._store.truncate();
 
-            /** @type {Array.<Block>} */
-            const denseSuffix = proof.prefix.denseSuffix();
+        /** @type {Array.<Block>} */
+        const denseSuffix = proof.prefix.denseSuffix();
 
-            // Put all other prefix blocks in the store as well (so they can be retrieved via getBlock()/getBlockAt()),
-            // but don't allow blocks to be appended to them by setting totalDifficulty = -1;
-            let superBlockCounts = new SuperBlockCounts();
-            for (let i = 0; i < proof.prefix.length - denseSuffix.length; i++) {
-                const block = proof.prefix.blocks[i];
-                const hash = block.hash();
-                const depth = BlockUtils.getHashDepth(await block.pow());
-                superBlockCounts = superBlockCounts.copyAndAdd(depth);
+        // Put all other prefix blocks in the store as well (so they can be retrieved via getBlock()/getBlockAt()),
+        // but don't allow blocks to be appended to them by setting totalDifficulty = -1;
+        let superBlockCounts = new SuperBlockCounts();
+        for (let i = 0; i < proof.prefix.length - denseSuffix.length; i++) {
+            const block = proof.prefix.blocks[i];
+            const hash = block.hash();
+            const depth = BlockUtils.getHashDepth(await block.pow());
+            superBlockCounts = superBlockCounts.copyAndAdd(depth);
 
-                const data = new ChainData(block, /*totalDifficulty*/ -1, /*totalWork*/ -1, superBlockCounts, true);
-                await this._store.putChainData(hash, data);
-            }
+            const data = new ChainData(block, /*totalDifficulty*/ -1, /*totalWork*/ -1, superBlockCounts, true);
+            await this._store.putChainData(hash, data);
+        }
 
-            // Set the tail end of the dense suffix of the prefix as the new chain head.
-            const tailEnd = denseSuffix[0];
-            this._headHash = tailEnd.hash();
-            this._mainChain = await ChainData.initial(tailEnd, superBlockCounts);
-            await this._store.putChainData(this._headHash, this._mainChain);
+        // Set the tail end of the dense suffix of the prefix as the new chain head.
+        const tailEnd = denseSuffix[0];
+        this._headHash = tailEnd.hash();
+        this._mainChain = await ChainData.initial(tailEnd, superBlockCounts);
+        await this._store.putChainData(this._headHash, this._mainChain);
 
-            // Only in the dense suffix of the prefix we can calculate the difficulties.
-            for (let i = 1; i < denseSuffix.length; i++) {
-                const block = denseSuffix[i];
-                const result = await this._pushLightBlock(block); // eslint-disable-line no-await-in-loop
-                Assert.that(result >= 0);
-            }
+        // Only in the dense suffix of the prefix we can calculate the difficulties.
+        for (let i = 1; i < denseSuffix.length; i++) {
+            const block = denseSuffix[i];
+            const result = await this._pushLightBlock(block); // eslint-disable-line no-await-in-loop
+            Assert.that(result >= 0);
         }
 
         // Push all suffix blocks.
@@ -253,19 +249,7 @@ class PartialLightChain extends LightChain {
             return NanoChain.OK_EXTENDED;
         }
 
-        // Otherwise, check if the new chain is harder than our current main chain.
-        if (chainData.totalDifficulty > this._mainChain.totalDifficulty) {
-            // A fork has become the hardest chain, rebranch to it.
-            await this._rebranch(blockHash, chainData);
-
-            return NanoChain.OK_REBRANCHED;
-        }
-
-        // Otherwise, we are creating/extending a fork. Store chain data.
-        Log.v(NanoChain, `Creating/extending fork with block ${blockHash}, height=${block.height}, totalDifficulty=${chainData.totalDifficulty}, totalWork=${chainData.totalWork}`);
-        await this._store.putChainData(blockHash, chainData);
-
-        return NanoChain.OK_FORKED;
+        throw new Error('Invalid call to _pushBlockInternal');
     }
 
     /**
@@ -353,7 +337,10 @@ class PartialLightChain extends LightChain {
 
         // Check whether we're complete.
         if (!this.needsMoreBlocks()) {
-            await this._complete();
+            const result = await this._complete();
+            if (!result) {
+                return FullChain.ERR_INVALID;
+            }
         }
 
         return FullChain.OK_EXTENDED;
@@ -432,14 +419,14 @@ class PartialLightChain extends LightChain {
         }
 
         chainData.onMainChain = true;
-        chainData.mainChainSuccessor = this._proofHead.head.hash();
+        chainData.mainChainSuccessor = chainData.head.hash().equals(this._proofHead.head.hash()) ? null : this._proofHead.head.hash();
         await this._store.putChainData(blockHash, chainData);
 
         this._proofHead = chainData;
 
         // Check whether we're complete.
         if (!this.needsMoreBlocks()) {
-            await this._complete();
+            return this._complete();
         }
 
         return true;
@@ -466,10 +453,25 @@ class PartialLightChain extends LightChain {
     }
 
     /**
-     * @returns {Promise.<void>}
+     * @returns {Promise.<boolean>}
      * @private
      */
     async _complete() {
+        // Build up transaction cache and validate against double spends
+        this._transactionCache = new TransactionCache();
+        let chainData = this._proofHead;
+        while (chainData) {
+            // Check against transaction cache
+            for (const tx of chainData.head.transactions) {
+                if (this._transactionCache.containsTransaction(tx)) {
+                    Log.w(PartialLightChain, `Rejecting block - Double Transaction Error!`);
+                    return false;
+                }
+            }
+            this._transactionCache.pushBlock(chainData.head);
+            chainData = chainData.mainChainSuccessor ? await this._store.getChainData(chainData.mainChainSuccessor, true) : null;
+        }
+
         this._state = PartialLightChain.State.COMPLETE;
         if (this._accountsTx) {
             await this._accountsTx.abort();
@@ -477,22 +479,35 @@ class PartialLightChain extends LightChain {
         }
 
         const currentProof = this._proof || await this._getChainProof();
-        this.fire('complete', currentProof, this._headHash, this._mainChain);
+        this.fire('complete', currentProof, this._headHash, this._mainChain, this._transactionCache);
+        return true;
     }
 
     /**
      * @returns {Promise.<boolean>}
      */
     async commit() {
+        return this._commitSynchronizer.push(/*priority*/ 0,
+            this._commit.bind(this));
+    }
+
+    /**
+     * @returns {Promise.<boolean>}
+     */
+    async _commit() {
         if (this._accountsTx) {
             await this._accountsTx.abort();
+            this._accountsTx = null;
         }
 
         const result = await JDB.JungleDB.commitCombined(...this._store.txs, this._partialTree.tx);
         this._partialTree = null;
 
         const currentProof = this._proof || await this._getChainProof();
-        this.fire('committed', currentProof, this._headHash, this._mainChain);
+        // Only set values in FullChain if commit was successful
+        if (result) {
+            this.fire('committed', currentProof, this._headHash, this._mainChain, this._transactionCache);
+        }
 
         return result;
     }
@@ -501,12 +516,15 @@ class PartialLightChain extends LightChain {
      * @returns {Promise.<void>}
      */
     async abort() {
+        if (this._state === PartialLightChain.State.ABORTED) return;
         this._state = PartialLightChain.State.ABORTED;
         if (this._accountsTx) {
             await this._accountsTx.abort();
+            this._accountsTx = null;
         }
         if (this._partialTree) {
             await this._partialTree.abort();
+            this._partialTree = null;
         }
         await this._store.abort();
         this.fire('aborted');

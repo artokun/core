@@ -7,10 +7,10 @@ class PrioritySynchronizer extends Observable {
     constructor(numPriorities, throttleAfter, throttleWait) {
         super();
 
-        /** @type {Array.<Array.<object>>} */
+        /** @type {Array.<LinkedList.<object>>} */
         this._queues = [];
         for (let i = 0; i < numPriorities; i++) {
-            this._queues[i] = [];
+            this._queues[i] = new LinkedList();
         }
 
         /** @type {boolean} */
@@ -21,6 +21,12 @@ class PrioritySynchronizer extends Observable {
         this._throttleWait = throttleWait;
         /** @type {number} */
         this._elapsed = 0;
+        /** @type {number} */
+        this._totalElapsed = 0;
+        /** @type {number} */
+        this._totalJobs = 0;
+        /** @type {number} */
+        this._totalThrottles = 0;
     }
 
     /**
@@ -51,8 +57,8 @@ class PrioritySynchronizer extends Observable {
             for (const job of queue) {
                 if (job.reject) job.reject();
             }
+            queue.clear();
         }
-        this._queues = [];
     }
 
     async _doWork() {
@@ -70,9 +76,13 @@ class PrioritySynchronizer extends Observable {
                     if (job.reject) job.reject(e);
                 }
 
+                this._totalJobs++;
+
                 if (this._throttleAfter !== undefined) {
                     this._elapsed += Date.now() - start;
                     if (this._elapsed >= this._throttleAfter) {
+                        this._totalElapsed += this._elapsed;
+                        this._totalThrottles++;
                         this._elapsed = 0;
                         setTimeout(this._doWork.bind(this), this._throttleWait);
                         return;
@@ -82,6 +92,7 @@ class PrioritySynchronizer extends Observable {
         }
 
         this._working = false;
+        this._totalElapsed += this._elapsed;
         this._elapsed = 0;
         this.fire('work-end', this);
     }
@@ -89,6 +100,26 @@ class PrioritySynchronizer extends Observable {
     /** @type {boolean} */
     get working() {
         return this._working;
+    }
+
+    /** @type {number} */
+    get length() {
+        return this._queues.reduce((sum, q) => sum + q.length, 0);
+    }
+
+    /** @type {number} */
+    get totalElapsed() {
+        return this._totalElapsed;
+    }
+
+    /** @type {number} */
+    get totalJobs() {
+        return this._totalJobs;
+    }
+
+    /** @type {number} */
+    get totalThrottles() {
+        return this._totalThrottles;
     }
 }
 Class.register(PrioritySynchronizer);

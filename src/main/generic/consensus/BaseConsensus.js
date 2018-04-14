@@ -40,6 +40,7 @@ class BaseConsensus extends Observable {
 
         // Relay new (verified) transactions to peers.
         mempool.on('transaction-added', tx => this._onTransactionAdded(tx));
+        mempool.on('transaction-removed', tx => this._onTransactionRemoved(tx));
     }
 
     /**
@@ -47,7 +48,7 @@ class BaseConsensus extends Observable {
      */
     subscribe(subscription) {
         this._subscription = subscription;
-        for (const /** @type {BaseConsensusAgent} */ agent of this._agents.values()) {
+        for (const /** @type {BaseConsensusAgent} */ agent of this._agents.valueIterator()) {
             agent.subscribe(subscription);
         }
     }
@@ -191,7 +192,7 @@ class BaseConsensus extends Observable {
         // Don't announce head changes if we are not synced yet.
         if (!this._established) return;
 
-        for (const agent of this._agents.values()) {
+        for (const agent of this._agents.valueIterator()) {
             agent.relayBlock(head);
         }
     }
@@ -204,8 +205,18 @@ class BaseConsensus extends Observable {
         // Don't relay transactions if we are not synced yet.
         if (!this._established) return;
 
-        for (const agent of this._agents.values()) {
+        for (const agent of this._agents.valueIterator()) {
             agent.relayTransaction(tx);
+        }
+    }
+
+    /**
+     * @param {Transaction} tx
+     * @protected
+     */
+    _onTransactionRemoved(tx) {
+        for (const agent of this._agents.valueIterator()) {
+            agent.removeTransaction(tx);
         }
     }
 
@@ -226,10 +237,13 @@ class BaseConsensus extends Observable {
             return knownBlock;
         }
 
-        const agents = this._agents.values().filter(agent =>
-            agent.synced
-            && Services.isFullNode(agent.peer.peerAddress.services)
-        );
+        const agents = [];
+        for (const agent of this._agents.valueIterator()) {
+            if (agent.synced
+                && Services.isFullNode(agent.peer.peerAddress.services)) {
+                agents.push(agent);
+            }
+        }
 
         // Try agents first that (we think) know the reference block hash.
         const knownBlockHash = knownBlock.hash();
@@ -262,10 +276,13 @@ class BaseConsensus extends Observable {
             return [];
         }
 
-        const agents = this._agents.values().filter(agent =>
-            agent.synced
-            && !Services.isNanoNode(agent.peer.peerAddress.services)
-        );
+        const agents = [];
+        for (const agent of this._agents.valueIterator()) {
+            if (agent.synced
+                && !Services.isNanoNode(agent.peer.peerAddress.services)) {
+                agents.push(agent);
+            }
+        }
 
         // Try agents first that (we think) know the reference block hash.
         const blockHash = block.hash();
@@ -293,10 +310,14 @@ class BaseConsensus extends Observable {
      * @protected
      */
     async _requestTransactionReceipts(address) {
-        const agents = this._agents.values().filter(agent =>
-            agent.synced
-            && Services.isFullNode(agent.peer.peerAddress.services)
-        ).sort(() => Math.random() - 0.5);
+        const agents = [];
+        for (const agent of this._agents.valueIterator()) {
+            if (agent.synced
+                && Services.isFullNode(agent.peer.peerAddress.services)) {
+                agents.push(agent);
+            }
+        }
+        agents.sort(() => Math.random() - 0.5);
 
         for (const /** @type {BaseConsensusAgent} */ agent of agents) {
             try {

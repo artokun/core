@@ -1,9 +1,10 @@
 const http = require('http');
+const btoa = require('btoa');
 const Nimiq = require('../../../dist/node.js');
 
 class JsonRpcServer {
     /**
-     * @param {{port: number, corsdomain: string|Array.<string>}} config
+     * @param {{port: number, corsdomain: string|Array.<string>, username: ?string, password: ?string}} config
      */
     constructor(config) {
         if (typeof config.corsdomain === 'string') config.corsdomain = [config.corsdomain];
@@ -14,11 +15,14 @@ class JsonRpcServer {
                 res.setHeader('Access-Control-Allow-Methods', 'POST');
                 res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
             }
+
             if (req.method === 'GET') {
                 res.writeHead(200);
                 res.end('Nimiq JSON-RPC Server\n');
             } else if (req.method === 'POST') {
-                this._onRequest(req, res);
+                if (JsonRpcServer._authenticate(req, res, config.username, config.password)) {
+                    this._onRequest(req, res);
+                }
             } else {
                 res.writeHead(200);
                 res.end();
@@ -121,6 +125,24 @@ class JsonRpcServer {
         }
     }
 
+    /**
+     * @param req
+     * @param res
+     * @param {?string} username
+     * @param {?string} password
+     * @returns {boolean}
+     * @private
+     */
+    static _authenticate(req, res, username, password) {
+        if (username && password && req.headers.authorization !== `Basic ${btoa(`${username}:${password}`)}`) {
+            res.writeHead(401, {'WWW-Authenticate': 'Basic realm="Use user-defined username and password to access the JSON-RPC API." charset="UTF-8"'});
+            res.end();
+            return false;
+        }
+
+        return true;
+    }
+
 
     /*
      * Network
@@ -146,7 +168,11 @@ class JsonRpcServer {
     }
 
     peerList() {
-        return this._network.addresses.values().map((a) => this._peerAddressStateToPeerObj(a));
+        const peers = [];
+        for (const peerAddressState of this._network.addresses.iterator()) {
+            peers.push(this._peerAddressStateToPeerObj(peerAddressState));
+        }
+        return peers;
     }
 
     /**

@@ -155,6 +155,7 @@ class Mempool extends Observable {
         }
 
         this._transactionsByHash.remove(transaction.hash());
+        this.fire('transaction-removed', transaction);
     }
 
     /**
@@ -176,6 +177,7 @@ class Mempool extends Observable {
             } else {
                 byRecipient.remove(transaction.hash());
             }
+            this.fire('transaction-removed', transaction);
         } else {
             Log.e(Mempool, `Invalid state: no transactionsByRecipient for ${transaction}`);
         }
@@ -410,6 +412,11 @@ class Mempool extends Observable {
     /** @type {number} */
     get length() {
         return this._transactionsByHash.length;
+    }
+
+    /** @type {Synchronizer} */
+    get queue() {
+        return this._synchronizer;
     }
 }
 

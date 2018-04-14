@@ -55,23 +55,25 @@ class MetricsServer {
      * @private
      */
     _onPeerJoined(peer) {
-        peer.channel.on('message-log', (msg, peerChannel, time) => this._measureMessage(msg, time));
+        peer.channel.on('message-log', (msg, peerChannel, time, rawSize) => this._measureMessage(msg, time, rawSize));
     }
 
 
     /**
      * @param {Message} msg
      * @param {number} time
+     * @param {number} size
      * @private
      */
-    _measureMessage(msg, time) {
+    _measureMessage(msg, time, size) {
         if (!Nimiq.PeerChannel.Event[msg.type]) return;
         const str = Nimiq.PeerChannel.Event[msg.type];
         if (!this._messageMeasures.has(str)) {
-            this._messageMeasures.set(str, {occurrences: 0, timeSpentProcessing: 0});
+            this._messageMeasures.set(str, {occurrences: 0, timeSpentProcessing: 0, totalBytes: 0});
         }
         const obj = this._messageMeasures.get(str);
         obj.occurrences++;
+        if (size > 0) obj.totalBytes += size;
         if (time > 0) obj.timeSpentProcessing += time;
     }
 
@@ -107,6 +109,11 @@ class MetricsServer {
         MetricsServer._metric(res, 'chain_head_transactions', this._desc, head.transactionCount);
         MetricsServer._metric(res, 'chain_total_work', this._desc, this._blockchain.totalWork);
 
+        MetricsServer._metric(res, 'chain_queue_jobs', this._desc, this._blockchain.queue.totalJobs);
+        MetricsServer._metric(res, 'chain_queue_elapsed', this._desc, this._blockchain.queue.totalElapsed);
+        MetricsServer._metric(res, 'chain_queue_throttles', this._desc, this._blockchain.queue.totalThrottles);
+        MetricsServer._metric(res, 'chain_queue_length', this._desc, this._blockchain.queue.length);
+
         MetricsServer._metric(res, 'chain_block', this._with({'action': 'forked'}), this._blockchain.blockForkedCount);
         MetricsServer._metric(res, 'chain_block', this._with({'action': 'rebranched'}), this._blockchain.blockRebranchedCount);
         MetricsServer._metric(res, 'chain_block', this._with({'action': 'extended'}), this._blockchain.blockExtendedCount);
@@ -123,6 +130,11 @@ class MetricsServer {
         }
         MetricsServer._metric(res, 'mempool_transactions', this._with({'fee_per_byte': `>=${group[group.length - 1]}`}), txs.filter((tx) => tx.feePerByte >= group[group.length - 1]).length);
         MetricsServer._metric(res, 'mempool_size', this._desc, txs.reduce((a, b) => a + b.serializedSize, 0));
+
+        MetricsServer._metric(res, 'mempool_queue_jobs', this._desc, this._mempool.queue.totalJobs);
+        MetricsServer._metric(res, 'mempool_queue_elapsed', this._desc, this._mempool.queue.totalElapsed);
+        MetricsServer._metric(res, 'mempool_queue_throttles', this._desc, this._mempool.queue.totalThrottles);
+        MetricsServer._metric(res, 'mempool_queue_length', this._desc, this._mempool.queue.length);
     }
 
     _networkMetrics(res) {
@@ -138,6 +150,7 @@ class MetricsServer {
             const obj = this._messageMeasures.get(type);
             MetricsServer._metric(res, 'message_rx_count', this._with({'type': type}), obj.occurrences);
             MetricsServer._metric(res, 'message_rx_processing_time', this._with({'type': type}), obj.timeSpentProcessing);
+            MetricsServer._metric(res, 'message_rx_total_bytes', this._with({'type': type}), obj.totalBytes);
         }
 
     }
